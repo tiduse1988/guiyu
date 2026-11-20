@@ -196,6 +196,8 @@ struct BrowserTable: NSViewRepresentable {
             guard let t = table else { return }
             updateContextMenu(menu,at:(t as? BrowserNSTable)?.contextClickRow ?? t.clickedRow)
         }
+        // New folder always uses the pane's current directory, not a selected child folder.
+        var createFolderDestination: String? { parent.pasteDestination.flatMap { $0.isEmpty ? nil : $0 } }
         func updateContextMenu(_ menu:NSMenu, at index:Int) {
             menu.removeAllItems(); menu.autoenablesItems = false; contextRow = nil; contextRows = []
             guard let t = table else { return }
@@ -209,6 +211,9 @@ struct BrowserTable: NSViewRepresentable {
                 let paste = NSMenuItem(title:"粘贴",action:#selector(pasteClicked),keyEquivalent:""); paste.target = self
                 paste.isEnabled = MainActor.assumeIsolated { parent.pasteStore?.canPasteFiles(into:resolvedPasteDestination,from:(t as? BrowserNSTable)?.copyPasteboard ?? .general) == true }
                 menu.addItem(paste)
+                let create = NSMenuItem(title:"新建文件夹",action:#selector(createFolderClicked),keyEquivalent:""); create.target = self
+                create.isEnabled = MainActor.assumeIsolated { parent.pasteStore?.canCreateFolder(in:createFolderDestination) == true }
+                menu.addItem(create)
             }
             guard let row else { return }
             menu.addItem(.separator())
@@ -238,6 +243,10 @@ struct BrowserTable: NSViewRepresentable {
         @objc func quickArchiveClicked() { parent.quickArchive?(contextRows) }
         @objc func copyClicked() { copyFileRows(contextRows,to:(table as? BrowserNSTable)?.copyPasteboard ?? .general) }
         @objc func pasteClicked() { pasteSelection(from:(table as? BrowserNSTable)?.copyPasteboard ?? .general) }
+        @objc func createFolderClicked() {
+            guard let destination = createFolderDestination else { return }
+            MainActor.assumeIsolated { parent.pasteStore?.createFolder(in:destination) }
+        }
         @objc func batchRecommendClicked() { parent.batchRename?(contextRows,true) }
         @objc func batchManualClicked() { parent.batchRename?(contextRows,false) }
         func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {

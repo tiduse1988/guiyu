@@ -49,6 +49,8 @@ struct DirectoryOrderRow: NSViewRepresentable {
         view.selected = selected; view.select = select
         view.onPaste = { board in store.pasteFiles(into:directory.path,from:board) }
         view.canPaste = { board in store.canPasteFiles(into:directory.path,from:board) }
+        view.onCreateFolder = { store.createFolder(in:directory.path) }
+        view.canCreateFolder = { store.canCreateFolder(in:directory.path) }
         view.setAccessibilityLabel(view.title)
         view.setAccessibilityValue(selected ? "已选中" : "")
         view.needsDisplay = true
@@ -70,6 +72,8 @@ final class DirectoryOrderRowView: NSView, NSDraggingSource {
     var copyPasteboard:NSPasteboard = .general
     var onPaste: ((NSPasteboard) -> Void)?
     var canPaste: ((NSPasteboard) -> Bool)?
+    var onCreateFolder: (() -> Void)?
+    var canCreateFolder: (() -> Bool)?
     private let icon = NSImageView()
     private var pressPoint: NSPoint?
     private var isDragging = false
@@ -114,7 +118,13 @@ final class DirectoryOrderRowView: NSView, NSDraggingSource {
         let menu = NSMenu(); menu.autoenablesItems = false
         let copy = NSMenuItem(title:"复制",action:#selector(copy(_:)),keyEquivalent:""); copy.target = self; menu.addItem(copy)
         let paste = NSMenuItem(title:"粘贴",action:#selector(paste(_:)),keyEquivalent:""); paste.target = self; paste.isEnabled = canPaste?(copyPasteboard) == true; menu.addItem(paste)
+        let create = NSMenuItem(title:"新建文件夹",action:#selector(createFolder(_:)),keyEquivalent:""); create.target = self
+        create.isEnabled = canCreateFolder?() == true; menu.addItem(create)
         return menu
+    }
+    @objc func createFolder(_ sender:Any?) {
+        guard let window,window.firstResponder === self,window.attachedSheet == nil,selected,canCreateFolder?() == true else { return }
+        onCreateFolder?()
     }
     override func performKeyEquivalent(with event:NSEvent) -> Bool { performCopyShortcut(event) || super.performKeyEquivalent(with:event) }
     override func keyDown(with event:NSEvent) {
