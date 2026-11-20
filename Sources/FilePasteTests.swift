@@ -135,6 +135,17 @@ import SwiftUI
             try verify(menu.items.contains(where:{$0.title == "复制"}),"Row context menu exposes Copy")
             try verify(menu.items.contains(where:{$0.title == "新建文件夹" && $0.isEnabled}),"Row context menu exposes New Folder in the current left directory")
             try verify(coordinator.createFolderDestination == a.path,"New Folder targets the pane directory, not the selected child folder")
+            store.lastFilePaste = nil
+            coordinator.createFolderClicked()
+            try wait { store.lastFilePaste != nil && !store.busy && !store.isPastingFiles }
+            guard let created = store.lastFilePaste else { throw namingError("中栏新建文件夹结果缺失") }
+            try verify(created.failure == nil && created.destination == a.path && created.paths.count == 1 && fm.fileExists(atPath:created.paths[0]),"New Folder beside a selected project writes into the middle directory")
+            try wait {
+                tables(host).contains { table in
+                    guard let c = table.delegate as? BrowserTable.Coordinator, c.parent.appearance == .projects else { return false }
+                    return c.selectedRows.map(\.id) == created.paths
+                }
+            }
             coordinator.copyClicked()
             try verify(filePasteURLs(from:board).map(\.path) == [b.path],"Context-menu Copy publishes the clicked project as native file URLs")
         }

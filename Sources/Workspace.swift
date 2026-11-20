@@ -425,8 +425,12 @@ struct ProjectWorkspace: View {
         .onChange(of:store.busy) { value in if !value { selectPastedItemsWhenReady() } }
         .onChange(of:store.lastFilePaste?.id) { _ in
             guard let result = store.lastFilePaste, archiveSourceID == nil else { return }
-            if (result.destination == selectedDirectory?.path && project == nil) || result.destination == sourceFolder {
-                if result.destination == sourceFolder { preferCategoryGrouping = false }
+            // Middle-pane creates (New Folder) target the directory even when a project row is selected;
+            // select that sibling instead of requiring project == nil as paste-into-A did.
+            let intoMiddle = result.destination == selectedDirectory?.path
+            let intoRight = result.destination == sourceFolder
+            if intoMiddle || intoRight {
+                if intoRight { preferCategoryGrouping = false }
                 pendingPasteSelection = result; query = ""; loadProjectDirectory(); loadSource(); refreshSearch()
             }
         }
