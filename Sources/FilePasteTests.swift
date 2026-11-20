@@ -40,7 +40,12 @@ import SwiftUI
     }
     let closed = presentDirectoryWithPastes(rows,mode:"按类别",collapsed:["recent-paste:"+b.path],categories:WorkspaceCategory.defaults,assignments:[:],paths:pins,scope:b.path)
     try verify(closed.first?.expanded == false && !closed.contains(where:{pins.contains($0.id)}),"The recent-copy group can collapse without duplicating items elsewhere")
-    print("PASS: A/B destinations, recursive copy, source preservation, collisions, preflight, staging cleanup, text clipboard and top ordering in all three views")
+    let created = executeCreateFolder(in:b.path), again = executeCreateFolder(in:b.path)
+    try verify(created.failure == nil && created.paths.first == b.appendingPathComponent("未命名文件夹").path,"New folder uses the Finder-style default name")
+    try verify(again.failure == nil && again.paths.first == b.appendingPathComponent("未命名文件夹 2").path,"Repeated new-folder names increment with a space")
+    try verify(executeCreateFolder(in:b.appendingPathComponent("不存在").path).failure != nil,"Missing destinations cannot create folders")
+    try verify(store.canCreateFolder(in:a.path) && !store.canCreateFolder(in:nil) && !store.canCreateFolder(in:""),"Create-folder availability matches a writable destination")
+    print("PASS: A/B destinations, recursive copy, source preservation, collisions, preflight, staging cleanup, text clipboard, top ordering and new-folder creation")
 }
 
 @MainActor func filePasteUIReview() throws {
@@ -85,10 +90,22 @@ import SwiftUI
         try verify(copyFilePaths([source.path],to:board));table.copyPasteboard = board;window.makeFirstResponder(table)
         let menu = NSMenu();coordinator.updateContextMenu(menu,at:-1)
         try verify(menu.items.contains(where:{$0.title == "粘贴" && $0.isEnabled}),"Blank-space context menu supports paste, including empty directories")
+        try verify(menu.items.contains(where:{$0.title == "新建文件夹" && $0.isEnabled}),"Blank-space and selection context menus expose New Folder for the current directory")
         if isRight {
             let point = table.convert(NSPoint(x:20,y:table.bounds.maxY-10),to:nil)
             let event = NSEvent.mouseEvent(with:.rightMouseDown,location:point,modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,clickCount:1,pressure:1)!
             try verify(table.menu(for:event) != nil && window.firstResponder === table && table.contextClickRow == -1,"Right-clicking native blank space focuses the right pane and exposes its paste menu")
+            coordinator.createFolderClicked()
+            try wait { store.lastFilePaste != nil && !store.busy && !store.isPastingFiles }
+            guard let created = store.lastFilePaste else { throw namingError("新建文件夹结果缺失") }
+            try verify(created.failure == nil && created.destination == nested.path && created.paths.count == 1 && fm.fileExists(atPath:created.paths[0]),"Context-menu New Folder creates inside the right pane directory")
+            try wait {
+                tables(host).contains { table in
+                    guard let c = table.delegate as? BrowserTable.Coordinator else { return false }
+                    return c.rows.contains(where:{$0.id == created.paths[0]}) && c.selectedRows.map(\.id) == created.paths
+                }
+            }
+            store.lastFilePaste = nil
         }
         if scenario == "middle-B" { coordinator.pasteClicked() }
         else if scenario == "left-A" {
@@ -116,8 +133,26 @@ import SwiftUI
         if scenario == "middle-B", let index = coordinator.rows.firstIndex(where:{$0.id == b.path}) {
             coordinator.updateContextMenu(menu,at:index)
             try verify(menu.items.contains(where:{$0.title == "复制"}),"Row context menu exposes Copy")
+            try verify(menu.items.contains(where:{$0.title == "新建文件夹" && $0.isEnabled}),"Row context menu exposes New Folder in the current left directory")
+            try verify(coordinator.createFolderDestination == a.path,"New Folder targets the pane directory, not the selected child folder")
+            store.lastFilePaste = nil
+            coordinator.createFolderClicked()
+            try wait { store.lastFilePaste != nil && !store.busy && !store.isPastingFiles }
+            guard let created = store.lastFilePaste else { throw namingError("中栏新建文件夹结果缺失") }
+            try verify(created.failure == nil && created.destination == a.path && created.paths.count == 1 && fm.fileExists(atPath:created.paths[0]),"New Folder beside a selected project writes into the middle directory")
+            try wait {
+                tables(host).contains { table in
+                    guard let c = table.delegate as? BrowserTable.Coordinator, c.parent.appearance == .projects else { return false }
+                    return c.selectedRows.map(\.id) == created.paths
+                }
+            }
             coordinator.copyClicked()
             try verify(filePasteURLs(from:board).map(\.path) == [b.path],"Context-menu Copy publishes the clicked project as native file URLs")
+        }
+        if scenario == "left-A" {
+            guard let sidebar = directoryRows(host).first(where:{$0.payload?.path == a.path}) else { throw namingError("缺少左侧目录菜单") }
+            let sidebarMenu = sidebar.menu(for:NSEvent.mouseEvent(with:.rightMouseDown,location:.zero,modifierFlags:[],timestamp:0,windowNumber:window.windowNumber,context:nil,eventNumber:0,clickCount:1,pressure:1)!)
+            try verify(sidebarMenu?.items.contains(where:{$0.title == "新建文件夹" && $0.isEnabled}) == true,"Left directory context menu exposes New Folder")
         }
         if let focused = tables(host).first {
             let editor = NSTextView(frame:NSRect(x:0,y:0,width:100,height:30));host.addSubview(editor);window.makeFirstResponder(editor)

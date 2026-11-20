@@ -105,9 +105,40 @@ func presentDirectoryWithPastes(_ entries:[BrowserRow], mode:String, collapsed:S
     return [BrowserRow(id:id,title:"刚复制",header:true,count:pinned.count,expanded:!collapsed.contains(id))]+(collapsed.contains(id) ? [] : pinned)+rest
 }
 
+// Creates an empty folder in the current directory, same refresh/selection path as paste.
+// Menu label is 新建文件夹; Finder-style default name is 未命名文件夹, then 未命名文件夹 2…
+func executeCreateFolder(in destination: String, preferredName: String = "未命名文件夹") -> FilePasteResult {
+    let folder = URL(fileURLWithPath:canonicalPath(destination))
+    var result = FilePasteResult(destination:folder.path)
+    do {
+        let values = try folder.resourceValues(forKeys:[.isDirectoryKey,.isPackageKey])
+        guard values.isDirectory == true, values.isPackage != true else { throw namingError("请选择可写入的普通文件夹。") }
+        let targetIdentity = fileIdentity(folder.path)
+        guard targetIdentity != nil else { throw namingError("目标文件夹已失效，请重新选择。") }
+        let stem = preferredName.trimmingCharacters(in:.whitespacesAndNewlines)
+        guard !stem.isEmpty, !stem.contains("/"), stem != "." && stem != ".." else { throw namingError("文件夹名称无效。") }
+        var number = 1
+        while true {
+            guard fileIdentity(folder.path) == targetIdentity else { throw namingError("目标文件夹已变化，已停止创建。") }
+            let name = number == 1 ? stem : stem+" \(number)"
+            let target = folder.appendingPathComponent(name)
+            if mkdir(target.path, 0o755) == 0 {
+                result.paths.append(target.path); break
+            }
+            let code = errno
+            guard code == EEXIST, number < 10000 else { throw NSError(domain:NSPOSIXErrorDomain,code:Int(code)) }
+            number += 1
+        }
+    } catch { result.failure = error.localizedDescription }
+    return result
+}
+
 @MainActor extension Store {
     func canPasteFiles(into directory: String?, from board: NSPasteboard = .general) -> Bool {
         directory?.isEmpty == false && !busy && !isPastingFiles && !filePasteURLs(from:board).isEmpty
+    }
+    func canCreateFolder(in directory: String?) -> Bool {
+        directory?.isEmpty == false && !busy && !isPastingFiles
     }
     func pasteFiles(into directory: String, from board: NSPasteboard = .general, completion: ((FilePasteResult) -> Void)? = nil) {
         guard !busy, !isPastingFiles else { return }
@@ -127,6 +158,26 @@ func presentDirectoryWithPastes(_ entries:[BrowserRow], mode:String, collapsed:S
                 }
                 self.message = "已复制 \(result.paths.count) 项"
                 if let problem = result.failure { self.error = "已复制 \(result.paths.count) 项，剩余未完成："+problem }
+                completion?(result)
+            }
+        }
+    }
+    func createFolder(in directory: String, completion: ((FilePasteResult) -> Void)? = nil) {
+        guard canCreateFolder(in:directory) else { return }
+        isPastingFiles = true; message = "正在新建文件夹…"
+        DispatchQueue.global(qos:.userInitiated).async {
+            let result = executeCreateFolder(in:directory)
+            DispatchQueue.main.async {
+                self.isPastingFiles = false
+                if !result.paths.isEmpty {
+                    let previous = self.pastedPathsByDirectory[result.destination] ?? []
+                    self.pastedPathsByDirectory[result.destination] = result.paths+previous.filter{!result.paths.contains($0)}
+                    self.fileOperationRevision += 1
+                    self.lastFilePaste = result
+                    self.refresh()
+                    self.message = "已新建文件夹"
+                }
+                if let problem = result.failure { self.error = result.paths.isEmpty ? problem : "已新建文件夹，但："+problem }
                 completion?(result)
             }
         }
